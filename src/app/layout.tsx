@@ -1,6 +1,14 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+
 import "./globals.css";
+
+/** Same source as `next.config.ts` `basePath` — must match for manifest / icons on GitHub Pages. */
+const assetPrefix = process.env.NEXT_PUBLIC_BASE_PATH?.replace(/\/$/, "") ?? "";
+
+function withAssetPrefix(path: string): string {
+  return `${assetPrefix}${path}`;
+}
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -19,7 +27,7 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: "Anki2 Card Creator",
   description: "Anki2 tooling: paste JSON and create cards",
-  manifest: "/manifest.webmanifest",
+  manifest: withAssetPrefix("/manifest.webmanifest"),
   appleWebApp: {
     capable: true,
     title: "Anki2 Card Creator",
@@ -27,10 +35,12 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
-      { url: "/icon-192.png", sizes: "192x192", type: "image/png" },
-      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
+      { url: withAssetPrefix("/icon-192.png"), sizes: "192x192", type: "image/png" },
+      { url: withAssetPrefix("/icon-512.png"), sizes: "512x512", type: "image/png" },
     ],
-    apple: [{ url: "/icon-192.png", sizes: "192x192", type: "image/png" }],
+    apple: [
+      { url: withAssetPrefix("/icon-192.png"), sizes: "192x192", type: "image/png" },
+    ],
   },
 };
 
