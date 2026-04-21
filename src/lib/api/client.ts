@@ -49,11 +49,39 @@ export function getResolvedApiKey(): string | undefined {
   return t || undefined;
 }
 
+const E2E_QUERY = "ankiv2_e2e";
+const E2E_SESSION_KEY = "ankiv2_e2e";
+
+function shouldSendAnkiv2TestModeHeader(): boolean {
+  if (process.env.NEXT_PUBLIC_ANKIV2_E2E === "1") {
+    return true;
+  }
+  if (typeof window === "undefined") {
+    return false;
+  }
+  try {
+    const q = new URLSearchParams(window.location.search).get(E2E_QUERY);
+    if (q === "1") {
+      sessionStorage.setItem(E2E_SESSION_KEY, "1");
+    }
+  } catch {
+    /* ignore */
+  }
+  try {
+    return sessionStorage.getItem(E2E_SESSION_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const base = getBaseUrl();
   const headers = new Headers(init.headers);
   if (init.body !== undefined && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
+  }
+  if (shouldSendAnkiv2TestModeHeader()) {
+    headers.set("X-Ankiv2-Test-Mode", "1");
   }
   const key = getResolvedApiKey();
   if (key) {
