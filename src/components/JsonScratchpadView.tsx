@@ -141,6 +141,9 @@ export function JsonScratchpadView() {
         migration_label?: string;
       };
       setResult(json);
+      setRaw("");
+      setExtraArrays([]);
+      setSchemaCheck({ kind: "idle" });
     } catch (e) {
       setRequestError(e instanceof Error ? e.message : "Request failed");
     } finally {
