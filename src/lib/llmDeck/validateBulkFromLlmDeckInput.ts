@@ -35,6 +35,8 @@ export function noteTypeFromParentDeckName(parentSegment: string): string {
       return "vocab";
     case "knowledge":
       return "knowledge";
+    case "basic":
+      return "basic";
     case "french":
       return "language";
     default:
