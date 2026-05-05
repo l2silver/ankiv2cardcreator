@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { apiFetch, getDisplayApiBaseUrl } from "@/lib/api/client";
 import { fetchDistinctDeckIds } from "@/lib/api/decks";
 import { SearchableDeckPicker } from "@/components/SearchableDeckPicker";
+import { assignMissingConceptIds } from "@/lib/llmDeck/assignMissingConceptIds";
 import {
   buildBulkImportPayload,
   noteTypeFromParentDeckName,
@@ -99,9 +100,10 @@ export function JsonScratchpadView() {
       setSchemaCheck({ kind: "bad-parse", message: r.error });
       return;
     }
+    const prepared = assignMissingConceptIds(r.parsed);
     setSchemaCheck({
       kind: "deck",
-      result: validateParsedJsonForBulkFromLlmDeck(r.parsed, { notesDeckName: deckName }),
+      result: validateParsedJsonForBulkFromLlmDeck(prepared, { notesDeckName: deckName }),
     });
   };
 
@@ -115,13 +117,14 @@ export function JsonScratchpadView() {
       return;
     }
 
-    const deckValidation = validateParsedJsonForBulkFromLlmDeck(r.parsed, { notesDeckName: deckName });
+    const prepared = assignMissingConceptIds(r.parsed);
+    const deckValidation = validateParsedJsonForBulkFromLlmDeck(prepared, { notesDeckName: deckName });
     setSchemaCheck({ kind: "deck", result: deckValidation });
     if (!deckValidation.ok) {
       return;
     }
 
-    const payload = buildBulkImportPayload(r.parsed, deckName, label);
+    const payload = buildBulkImportPayload(prepared, deckName, label);
 
     setPhase("posting");
     try {

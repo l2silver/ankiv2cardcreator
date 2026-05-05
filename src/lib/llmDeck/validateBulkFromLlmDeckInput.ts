@@ -136,7 +136,7 @@ function conceptIdFromNode(m: Record<string, unknown>): string {
   return b;
 }
 
-/** Matches Go `isConceptBranchMap`: not deck/leaf, `concept: true`, non-empty `conceptId`/`concept_id`, `cards` array. */
+/** Matches Go `isConceptBranchMap`: not deck/leaf, `concept: true`, non-empty `concept_id`/`conceptId`, `cards` array. */
 function isConceptBranchMap(m: Record<string, unknown>): boolean {
   if (isDeckBranchMap(m) || isCardLeafMap(m)) return false;
   if (!truthyConceptFlag(m.concept)) return false;
