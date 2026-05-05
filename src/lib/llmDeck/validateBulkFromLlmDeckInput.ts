@@ -73,8 +73,11 @@ export function buildBulkImportPayload(
   }
   let payload: unknown = parsed;
   if (tLabel) {
-    if (isPlainObject(parsed) && "deck" in parsed) {
-      payload = { ...(parsed as Record<string, unknown>), migration_label: tLabel };
+    const p = parsed as Record<string, unknown>;
+    // Match the server handler: only treat `deck` as an envelope when it is an object subtree.
+    // A deck tree root often has `deck` as the Anki path string; that must be wrapped as `{ deck: parsed }`.
+    if (isPlainObject(parsed) && "deck" in p && isPlainObject(p.deck)) {
+      payload = { ...p, migration_label: tLabel };
     } else {
       payload = { deck: parsed, migration_label: tLabel };
     }
@@ -83,7 +86,8 @@ export function buildBulkImportPayload(
 }
 
 /**
- * Same extraction as the server: inner `deck` when it is a non-null object; otherwise the whole root.
+ * Same extraction as the server (`FlattenLlmDeckJSON`): unwrap only when `deck` is a non-null object
+ * (envelope). When `deck` is a string (classic `{ deck, cards }` tree), the subtree is the whole root.
  */
 export function extractDeckObjectForFlatten(parsed: unknown): Record<string, unknown> {
   if (!isPlainObject(parsed)) {
@@ -91,13 +95,9 @@ export function extractDeckObjectForFlatten(parsed: unknown): Record<string, unk
   }
   if ("deck" in parsed) {
     const d = parsed.deck;
-    if (d === null || d === undefined) {
-      throw new Error("`deck` is present but null — remove the key or set it to the deck object");
+    if (isPlainObject(d)) {
+      return d;
     }
-    if (!isPlainObject(d)) {
-      throw new Error("`deck` must be an object (the LLM deck subtree)");
-    }
-    return d;
   }
   return parsed;
 }
@@ -122,6 +122,26 @@ function isDeckBranchMap(m: Record<string, unknown>): boolean {
 
 function isCardLeafMap(m: Record<string, unknown>): boolean {
   return typeof m.question === "string";
+}
+
+function truthyConceptFlag(v: unknown): boolean {
+  if (v === true) return true;
+  return typeof v === "string" && v.trim().toLowerCase() === "true";
+}
+
+function conceptIdFromNode(m: Record<string, unknown>): string {
+  const a = typeof m.concept_id === "string" ? m.concept_id.trim() : "";
+  if (a) return a;
+  const b = typeof m.conceptId === "string" ? m.conceptId.trim() : "";
+  return b;
+}
+
+/** Matches Go `isConceptBranchMap`: not deck/leaf, `concept: true`, non-empty `conceptId`/`concept_id`, `cards` array. */
+function isConceptBranchMap(m: Record<string, unknown>): boolean {
+  if (isDeckBranchMap(m) || isCardLeafMap(m)) return false;
+  if (!truthyConceptFlag(m.concept)) return false;
+  if (!conceptIdFromNode(m)) return false;
+  return Array.isArray(m.cards);
 }
 
 function validateMoreQuestionsOnCard(card: Record<string, unknown>, path: string): string[] {
@@ -151,6 +171,78 @@ function noteTypeFromBranch(branch: Record<string, unknown>, inherited: string):
   return nt;
 }
 
+function walkMixedCards(
+  children: unknown[],
+  segments: string[],
+  treeNoteType: string,
+  out: { path: string; card: Record<string, unknown> }[],
+  warnings: string[],
+): void {
+  const deckPath = segments.filter((s) => s.trim() !== "").join("::") || "(root)";
+
+  children.forEach((item, idx) => {
+    const path = `${deckPath} → cards[${idx}]`;
+    if (!isPlainObject(item)) {
+      warnings.push(`${path}: skipped — not an object`);
+      return;
+    }
+    if (isDeckBranchMap(item)) {
+      walkDeckBranch(item, segments, treeNoteType, out, warnings);
+      return;
+    }
+    if (isConceptBranchMap(item)) {
+      walkConceptCards(item, segments, treeNoteType, out, warnings);
+      return;
+    }
+    if (isCardLeafMap(item)) {
+      out.push({ path, card: item });
+      return;
+    }
+    warnings.push(
+      `${path}: skipped — not a card leaf (string "question"), deck branch (deck/deckName + cards), or concept (concept: true + concept_id + cards)`,
+    );
+  });
+}
+
+function walkConceptCards(
+  conceptNode: Record<string, unknown>,
+  segments: string[],
+  treeNoteType: string,
+  out: { path: string; card: Record<string, unknown> }[],
+  warnings: string[],
+): void {
+  const cid = conceptIdFromNode(conceptNode);
+  const deckPath = segments.filter((s) => s.trim() !== "").join("::") || "(root)";
+  const sub = conceptNode.cards;
+  if (!Array.isArray(sub)) {
+    warnings.push(`${deckPath} concept "${cid || "(missing id)"}": skipped — cards must be an array`);
+    return;
+  }
+
+  sub.forEach((item, idx) => {
+    const path = `${deckPath} → concept:${cid} → cards[${idx}]`;
+    if (!isPlainObject(item)) {
+      warnings.push(`${path}: skipped — not an object`);
+      return;
+    }
+    if (isDeckBranchMap(item)) {
+      walkDeckBranch(item, segments, treeNoteType, out, warnings);
+      return;
+    }
+    if (isConceptBranchMap(item)) {
+      walkConceptCards(item, segments, treeNoteType, out, warnings);
+      return;
+    }
+    if (isCardLeafMap(item)) {
+      out.push({ path, card: item });
+      return;
+    }
+    warnings.push(
+      `${path}: skipped — not a card leaf, deck branch, or nested concept (see server FlattenLlmDeckJSON)`,
+    );
+  });
+}
+
 function walkDeckBranch(
   branch: Record<string, unknown>,
   parent: string[],
@@ -160,30 +252,10 @@ function walkDeckBranch(
 ): void {
   const label = deckLabelFromMap(branch) ?? "";
   const segments = [...parent, label].filter((s) => s.trim() !== "");
-  const deckPath = segments.join("::");
-
   const nt = noteTypeFromBranch(branch, treeNoteType);
   const cards = branch.cards;
   if (!Array.isArray(cards)) return;
-
-  cards.forEach((item, idx) => {
-    const path = `${deckPath || "(root)"} → cards[${idx}]`;
-    if (!isPlainObject(item)) {
-      warnings.push(`${path}: skipped — not an object`);
-      return;
-    }
-    if (isDeckBranchMap(item)) {
-      walkDeckBranch(item, segments, nt, out, warnings);
-      return;
-    }
-    if (isCardLeafMap(item)) {
-      out.push({ path, card: item });
-      return;
-    }
-    warnings.push(
-      `${path}: skipped — not a card leaf (need string "question") and not a deck branch (need deck/deckName + cards)`,
-    );
-  });
+  walkMixedCards(cards, segments, nt, out, warnings);
 }
 
 /**
@@ -199,19 +271,15 @@ export function validateLlmDeckForBulkImport(deckObj: Record<string, unknown>): 
       return { ok: false, errors: ["deckName form requires cards array"], warnings };
     }
 
+    const nt =
+      typeof deckObj.noteType === "string" && deckObj.noteType.trim() !== ""
+        ? deckObj.noteType.trim()
+        : typeof deckObj.note_type === "string" && deckObj.note_type.trim() !== ""
+          ? deckObj.note_type.trim()
+          : "";
+
     const rows: { path: string; card: Record<string, unknown> }[] = [];
-    deckObj.cards.forEach((item, idx) => {
-      const path = `${deckName} → cards[${idx}]`;
-      if (!isPlainObject(item)) {
-        warnings.push(`${path}: skipped — not an object`);
-        return;
-      }
-      if (!isCardLeafMap(item)) {
-        warnings.push(`${path}: skipped — card leaf requires string field "question"`);
-        return;
-      }
-      rows.push({ path, card: item });
-    });
+    walkMixedCards(deckObj.cards as unknown[], [deckName], nt, rows, warnings);
 
     for (const { path, card } of rows) {
       errors.push(...validateMoreQuestionsOnCard(card, path));
